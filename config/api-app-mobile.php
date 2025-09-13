@@ -5,7 +5,7 @@ header('Access-Control-Allow-Headers: content-type, authorization');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') exit;
 
-require __DIR__ . '/db.php'; // $conn (mysqli), utf8mb4
+require __DIR__ . '/config_product.php'; // $conn_product (mysqli), utf8mb4
 
 function read_input(): array {
   $ct  = $_SERVER['CONTENT_TYPE'] ?? '';
@@ -17,73 +17,147 @@ function read_input(): array {
   return $_POST;
 }
 
-$action = $_GET['action'] ?? '';
+function fail($msg, $code=400){
+  http_response_code($code);
+  echo json_encode(['ok'=>false,'error'=>$msg]);
+  exit;
+}
+
+/* เปิดโหมดโชว์ข้อผิดพลาด mysqli ระหว่างดีบั๊ก (ถ้าโปรดักชันค่อยปิด) */
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+
+$body   = read_input();
+$action = $_GET['action'] ?? ($body['action'] ?? '');
 
 try {
-  if ($action === 'dbcheck') {
-    $row = $conn->query("SELECT DATABASE() db, VERSION() ver, @@hostname host")->fetch_assoc();
-    echo json_encode(['ok'=>true,'driver'=>'mysqli','db'=>$row['db'],'server'=>$row['ver'],'host'=>$row['host']]); exit;
+  /* ---- product_get ---- */
+  if ($action === 'product_get' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+    $code = trim((string)($_GET['code'] ?? ''));
+    if ($code === '') fail('Missing code');
+
+    $stmt = $conn_product->prepare("SELECT code,name,price,stock,image,updated_at FROM products WHERE code=? LIMIT 1");
+    $stmt->bind_param("s", $code);
+    $stmt->execute();
+    $res = $stmt->get_result();
+    $p = $res->fetch_assoc();
+
+    echo json_encode(['ok'=>true,'product'=>$p ?: null]); exit;
   }
 
-  if ($action === 'register' && $_SERVER['REQUEST_METHOD'] === 'POST') {
-    $d = read_input();
-    $username = trim((string)($d['username'] ?? ''));
-    $email    = trim((string)($d['email'] ?? ''));
-    $pass     = (string)($d['password'] ?? $d['pass'] ?? '');
+  /* ---- item_save : สร้าง order + item และอัปเดตสต๊อก (transaction) ---- */
+  if ($action === 'item_save' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    // รับค่าและ sanitize
+    $code      = preg_replace('/\D+/', '', (string)($body['code'] ?? '')); // เก็บเฉพาะเลข
+    $name      = trim((string)($body['name'] ?? ''));
+    $qty       = max(0, (int)($body['qty'] ?? 0));
+    $price     = (float)str_replace(',', '.', (string)($body['price'] ?? 0));
+    $direction = strtolower(trim((string)($body['direction'] ?? 'in'))); // in | out
+    $userId    = (int)($body['userId'] ?? 0);
 
-    // ต้องมีอย่างน้อย: email + password (ถ้าแอพมีช่อง username ก็ส่งมาด้วย)
-    if ($email === '' || $pass === '') { echo json_encode(['ok'=>false,'error'=>'Missing email or password']); exit; }
-    if (strlen($pass) < 6) { echo json_encode(['ok'=>false,'error'=>'Password too short']); exit; }
+    if ($code==='' || $name==='' || $qty<=0 || $price<=0) fail('Missing/invalid fields');
 
-    // ชน username/email ไหม (ถ้าส่ง username มาด้วย)
-    if ($username !== '') {
-      $stmt = $conn->prepare("SELECT id FROM users WHERE username=? LIMIT 1");
-      $stmt->bind_param("s",$username); $stmt->execute(); $stmt->store_result();
-      if ($stmt->num_rows>0) { echo json_encode(['ok'=>false,'error'=>'username exists']); exit; }
-      $stmt->close();
+    // คำนวณ
+    $lineTotal = $qty * $price;
+    $subtotal  = $lineTotal;
+    $vat       = round($subtotal * 0.07, 2);
+    $total     = $subtotal + $vat;
+
+    // เริ่มทรานแซกชัน
+    $conn_product->begin_transaction();
+
+    // 1) ให้แน่ใจว่ามีสินค้าใน products ก่อน (กัน FK พัง)
+    $stmt = $conn_product->prepare("SELECT code FROM products WHERE code=? LIMIT 1");
+    $stmt->bind_param("s", $code);
+    $stmt->execute();
+    $exists = (bool)$stmt->get_result()->fetch_row();
+
+    if (!$exists) {
+      $zero = 0;
+      $img  = null;
+      $stmt = $conn_product->prepare("
+        INSERT INTO products(code,name,price,stock,image,created_at,updated_at)
+        VALUES(?,?,?,?,?,NOW(),NOW())
+      ");
+      $stmt->bind_param("ssdis", $code, $name, $price, $zero, $img);
+      $stmt->execute();
     }
-    $stmt = $conn->prepare("SELECT id FROM users WHERE email=? LIMIT 1");
-    $stmt->bind_param("s",$email); $stmt->execute(); $stmt->store_result();
-    if ($stmt->num_rows>0) { echo json_encode(['ok'=>false,'error'=>'email exists']); exit; }
-    $stmt->close();
 
-    // บันทึก (ใช้คอลัมน์ password ตามสคีมาของคุณ)
-    $hash = password_hash($pass, PASSWORD_BCRYPT);
-    if ($username === '') {
-      // ถ้าไม่ได้ส่ง username มา จะลองสร้างจากอีเมลส่วนหน้า
-      $username = explode('@',$email)[0];
+    // 2) สร้าง orders
+    $dirForOrder = ($direction === 'out') ? 'out' : 'in';
+    $stmt = $conn_product->prepare("
+      INSERT INTO orders(subtotal,vat,total,direction,created_by)
+      VALUES (?,?,?,?,?)
+    ");
+    $stmt->bind_param("dddsi", $subtotal, $vat, $total, $dirForOrder, $userId);
+    $stmt->execute();
+    $orderId = (int)$stmt->insert_id;
+
+    // 3) สร้าง order_items (ใช้ product_code ให้ตรง FK)
+    $stmt = $conn_product->prepare("
+      INSERT INTO order_items(order_id, code, name, product_code, qty, price, line_total, created_at, direction)
+      VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), ?)
+    ");
+    $dirForItem = $dirForOrder; // เก็บไว้ดูทิศทางในรายการ
+    $stmt->bind_param("isssidds", $orderId, $code, $name, $code, $qty, $price, $lineTotal, $dirForItem);
+    $stmt->execute();
+
+    // 4) อัปเดต stock (+/- ตาม direction) และไม่ให้ต่ำกว่า 0
+    if ($direction === 'out') {
+      $stmt = $conn_product->prepare("
+        UPDATE products
+        SET stock = GREATEST(0, stock - ?), updated_at = NOW()
+        WHERE code = ?
+      ");
+    } else {
+      $stmt = $conn_product->prepare("
+        UPDATE products
+        SET stock = stock + ?, updated_at = NOW()
+        WHERE code = ?
+      ");
     }
-    $stmt = $conn->prepare("INSERT INTO users(username, email, password) VALUES(?,?,?)");
-    $stmt->bind_param("sss", $username, $email, $hash);
+    $stmt->bind_param("is", $qty, $code);
+    $stmt->execute();
+
+    // เสร็จปกติ
+    $conn_product->commit();
+    echo json_encode(['ok'=>true,'orderId'=>$orderId]); exit;
+  }
+
+  /* ---- product_upsert (ออปชัน: อัปเดตรูป/ชื่อ/ราคา แบบไม่ยุ่ง stock) ---- */
+  if ($action === 'product_upsert' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $code  = preg_replace('/\D+/', '', (string)($body['code'] ?? ''));
+    $name  = trim((string)($body['name'] ?? ''));
+    $price = (float)($body['price'] ?? 0);
+    $image = (string)($body['image'] ?? '');
+
+    if ($code==='' || $name==='') fail('Missing code/name');
+
+    $stmt = $conn_product->prepare("
+      INSERT INTO products(code,name,price,stock,image,created_at,updated_at)
+      VALUES(?,?,?,?,?,NOW(),NOW())
+      ON DUPLICATE KEY UPDATE
+        name=VALUES(name),
+        price=VALUES(price),
+        image=VALUES(image),
+        updated_at=VALUES(updated_at)
+    ");
+    $zero = 0;
+    $stmt->bind_param("ssdis", $code, $name, $price, $zero, $image);
     $stmt->execute();
 
     echo json_encode(['ok'=>true]); exit;
   }
 
-  if ($action === 'login' && $_SERVER['REQUEST_METHOD'] === 'POST') {
-    $d = read_input();
-    $identity = trim((string)($d['email'] ?? $d['username'] ?? ''));
-    $pass     = (string)($d['password'] ?? $d['pass'] ?? '');
-
-    if ($identity === '' || $pass === '') { echo json_encode(['ok'=>false,'error'=>'Missing email/username or password']); exit; }
-
-    // หาได้ทั้งสองแบบ: email หรือ username
-    $stmt = $conn->prepare("SELECT id, password FROM users WHERE email=? OR username=? LIMIT 1");
-    $stmt->bind_param("ss", $identity, $identity);
-    $stmt->execute();
-    $res = $stmt->get_result(); $row = $res->fetch_assoc();
-
-    if (!$row || !password_verify($pass, $row['password'])) {
-      echo json_encode(['ok'=>false,'error'=>'Invalid credentials']); exit;
-    }
-
-    $token = bin2hex(random_bytes(16)); // ตัวอย่าง token
-    echo json_encode(['ok'=>true,'token'=>$token,'userId'=>(int)$row['id']]); exit;
-  }
-
+  // ไม่ตรง action
   http_response_code(404);
-  echo json_encode(['ok'=>false,'error'=>'unknown action']);
+  echo json_encode(['ok'=>false,'error'=>'unknown action']); exit;
+
 } catch (Throwable $e) {
+  // rollback ถ้ามี transaction ค้าง
+  if ($conn_product->errno === 0) {
+    // best-effort
+    @mysqli_rollback($conn_product);
+  }
   http_response_code(500);
-  echo json_encode(['ok'=>false,'error'=>'server error']);
+  echo json_encode(['ok'=>false,'error'=>'server error','detail'=>$e->getMessage()]);
 }
