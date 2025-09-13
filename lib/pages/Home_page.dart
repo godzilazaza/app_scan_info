@@ -50,18 +50,34 @@ class _Home_pageState extends State<Home_page> {
     return Scaffold(
       // AppBar อยู่ทุกหน้า + ปุ่ม logout
       appBar: AppBar(
-        titleSpacing: 0,
-        title: Row(
-          children: [
-            CircleAvatar(radius: 16, child: Text(_initial)),
-            const SizedBox(width: 10),
-            Expanded(child: Text(_displayName, overflow: TextOverflow.ellipsis)),
-          ],
-        ),
-        actions: [
-          IconButton(tooltip: 'ออกจากระบบ', onPressed: _logout, icon: const Icon(Icons.logout)),
-        ],
+  titleSpacing: 0,
+  title: Row(
+    children: [
+      InkWell(
+        onTap: () {
+          setState(() => _index = 0); // ✅ กดแล้วกลับไปหน้าแรก
+        },
+        borderRadius: BorderRadius.circular(20),
+        child: CircleAvatar(radius: 30, child: Text(_initial)),
       ),
+      const SizedBox(width: 10),
+      Expanded(
+        child: Text(
+          _displayName,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+    ],
+  ),
+  actions: [
+    IconButton(
+      tooltip: 'ออกจากระบบ',
+      onPressed: _logout,
+      icon: const Icon(Icons.logout),
+    ),
+  ],
+),
+
 
       // เนื้อหาแต่ละเมนู (อย่าให้แท็บสร้าง Scaffold เอง)
       body: IndexedStack(
@@ -69,6 +85,7 @@ class _Home_pageState extends State<Home_page> {
         children: [
           const HomeTab(),
           ScanTab(active: _index == 1), // ส่ง active เพื่อ start/stop กล้อง
+          SavedTab(active: _index == 2), 
           const SavedTab(),
         ],
       ),

@@ -2,8 +2,19 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 	<dict>
-		<!-- <key>NSCameraUsageDescription</key>
-		<string>แอปต้องการใช้กล้องเพื่อสแกนบาร์โค้ด/คิวอาร์โค้ด</string> -->
+		<!-- กล้อง (จำเป็นสำหรับ mobile_scanner) -->
+		<key>NSCameraUsageDescription</key>
+		<string>แอปต้องใช้กล้องเพื่อสแกนบาร์โค้ด/QR</string>
+
+		<!-- ถ้าเลือกรูปจากคลังรูปด้วย image_picker -->
+		<key>NSPhotoLibraryUsageDescription</key>
+		<string>แอปต้องเข้าถึงคลังรูปเพื่อเลือกรูปภาพ</string>
+
+		<!-- ถ้าบันทึก/เขียนรูปกลับไปยังคลังรูป -->
+		<key>NSPhotoLibraryAddUsageDescription</key>
+		<string>แอปต้องบันทึกรูปภาพลงในคลังรูปของคุณ</string>
+		<key>CADisableMinimumFrameDurationOnPhone</key>
+		<true />
 		<key>CFBundleDevelopmentRegion</key>
 		<string>$(DEVELOPMENT_LANGUAGE)</string>
 		<key>CFBundleDisplayName</key>
@@ -26,6 +37,8 @@
 		<string>$(FLUTTER_BUILD_NUMBER)</string>
 		<key>LSRequiresIPhoneOS</key>
 		<true />
+		<key>UIApplicationSupportsIndirectInputEvents</key>
+		<true />
 		<key>UILaunchStoryboardName</key>
 		<string>LaunchScreen</string>
 		<key>UIMainStoryboardFile</key>
@@ -43,9 +56,5 @@
 			<string>UIInterfaceOrientationLandscapeLeft</string>
 			<string>UIInterfaceOrientationLandscapeRight</string>
 		</array>
-		<key>CADisableMinimumFrameDurationOnPhone</key>
-		<true />
-		<key>UIApplicationSupportsIndirectInputEvents</key>
-		<true />
 	</dict>
 </plist>

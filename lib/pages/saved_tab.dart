@@ -3,11 +3,13 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 const _host = 'https://weerispost.online';
-const _productsApi = '$_host/api/products.php';
-const _ordersApi   = '$_host/api/orders.php';
+const _productsApi = '$_host/api/products.php'; // ✅ products endpoint
+const _ordersApi   = '$_host/api/orders.php';   // ✅ orders endpoint
 
 class SavedTab extends StatefulWidget {
-  const SavedTab({super.key});
+  final bool active;                       // ✅ รับสถานะ active เข้ามา
+  const SavedTab({super.key, this.active = false});
+
   @override
   State<SavedTab> createState() => _SavedTabState();
 }
@@ -19,7 +21,16 @@ class _SavedTabState extends State<SavedTab> {
   @override
   void initState() {
     super.initState();
-    _loadProducts();
+    _loadProducts();                       // โหลดครั้งแรก
+  }
+
+  @override
+  void didUpdateWidget(covariant SavedTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // ✅ เมื่อสลับมาหน้านี้ (active เปลี่ยนจาก false -> true) ให้รีโหลดทันที
+    if (widget.active && !oldWidget.active) {
+      _loadProducts();
+    }
   }
 
   Future<void> _loadProducts() async {
@@ -72,59 +83,68 @@ class _SavedTabState extends State<SavedTab> {
         itemCount: _items.length,
         separatorBuilder: (_, __) => const SizedBox(height: 8),
         itemBuilder: (_, i) {
-          final p = _items[i];
-          return Card(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              child: ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                leading: ClipRRect(
-                  borderRadius: BorderRadius.circular(6),
-                  child: p.image == null || p.image!.isEmpty
-                      ? const Icon(Icons.inventory_2, size: 48)
-                      : Image.network(
-                          p.image!,
-                          width: 48,
-                          height: 48,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) =>
-                              const Icon(Icons.broken_image, size: 48),
-                        ),
+  final p = _items[i];
+
+  return Card(
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        leading: ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: (p.image == null || p.image!.isEmpty)
+              ? const Icon(Icons.inventory_2, size: 48)
+              : Image.network(
+                  p.image!,
+                  width: 48,
+                  height: 48,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) =>
+                      const Icon(Icons.broken_image, size: 48),
                 ),
-                title: Text(
-                  p.name,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                subtitle: Text(
-                  'รหัส: ${p.code}\n สต๊อก: ${p.stock}\n ราคาสินค้า :${p.price}\nอัปเดตล่าสุด${_fmt(p.updatedAt)}',
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                isThreeLine: true,
-                // ✅ เหลือปุ่มเดียว และจำกัดความสูงให้ไม่ล้น
-                trailing: SizedBox(
-                  height: 44,
-                  child: IconButton(
-                    icon: const Icon(Icons.history, color: Colors.blue),
-                    tooltip: 'ดูประวัติ 7 วัน',
-                    onPressed: () => _openHistory(p),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                  ),
-                ),
-              ),
-            ),
-          );
-        },
+        ),
+        title: Text(
+          p.name.isEmpty ? '(ไม่มีชื่อสินค้า)' : p.name,
+          style: const TextStyle(fontWeight: FontWeight.w600),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        subtitle: Text(
+          [
+            'รหัส: ${p.code}',
+            'สต๊อก: ${p.stock}',          // ← ใช้ p.stock โดยตรง
+            'ราคา: ${_fmtPrice(p.price)}',
+            'อัปเดตล่าสุด: ${_fmtDate(p.updatedAt)}',
+          ].join('\n'),
+          maxLines: 4,
+          overflow: TextOverflow.ellipsis,
+        ),
+        isThreeLine: true,
+        trailing: SizedBox(
+          height: 44,
+          child: IconButton(
+            icon: const Icon(Icons.history, color: Colors.blue),
+            tooltip: 'ดูประวัติ 7 วัน',
+            onPressed: () => _openHistory(p),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+          ),
+        ),
+      ),
+    ),
+  );
+},
       ),
     );
   }
 
-  String _fmt(DateTime dt) {
+  String _fmtDate(DateTime dt) {
     String two(int n) => n.toString().padLeft(2, '0');
     return '${dt.year}-${two(dt.month)}-${two(dt.day)} ${two(dt.hour)}:${two(dt.minute)}';
+  }
+
+  String _fmtPrice(double v) {
+    return v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(2);
   }
 }
 
@@ -178,16 +198,21 @@ class ProductRow {
   });
 
   factory ProductRow.fromJson(Map<String, dynamic> j) => ProductRow(
-        code: j['code'] as String,
-        name: (j['name'] ?? '') as String,
-        price: double.tryParse(j['price'].toString()) ?? 0.0,
-        stock: int.tryParse(j['stock'].toString()) ?? 0,
-        image: (j['image'] as String?)?.isEmpty == true ? null : j['image'] as String?,
-        updatedAt: _parseMysqlDateTime((j['updated_at'] ?? j['created_at']) as String),
+        code: (j['code'] ?? '').toString(),
+        name: (j['name'] ?? '').toString(),
+        price: double.tryParse(j['price']?.toString() ?? '') ?? 0.0,
+        stock: int.tryParse(j['stock']?.toString() ?? '') ?? 0,
+        image: ((j['image']?.toString() ?? '').isEmpty) ? null : j['image'].toString(),
+        updatedAt: _parseMysqlDateTime(
+          (j['updated_at'] ?? j['created_at'] ?? DateTime.now().toString()).toString(),
+        ),
       );
 }
 
-DateTime _parseMysqlDateTime(String s) => DateTime.parse(s.replaceFirst(' ', 'T'));
+DateTime _parseMysqlDateTime(String s) {
+  final normalized = s.contains('T') ? s : s.replaceFirst(' ', 'T');
+  return DateTime.tryParse(normalized) ?? DateTime.now();
+}
 
 /// ===== History sheet =====
 class _HistorySheet extends StatelessWidget {
@@ -263,10 +288,9 @@ class _HistorySheet extends StatelessWidget {
                 itemBuilder: (_, i) {
                   final h = list[i];
                   final dir = h.direction == 'in' ? 'เพิ่มสต๊อก' : 'ลบสต๊อก';
-                  final line = (h.qty * h.price).toStringAsFixed(2);
                   return ListTile(
                     leading: Icon(h.direction == 'in' ? Icons.upload : Icons.download),
-                    title: Text('$dir | ${h.qty} '),
+                    title: Text('$dir | ${h.qty} ชิ้น (฿${h.price})'),
                     subtitle: Text('เมื่อ: ${_fmt(h.at)}'),
                   );
                 },
@@ -293,9 +317,9 @@ class _HistoryEntry {
   });
 
   factory _HistoryEntry.fromJson(Map<String, dynamic> j) => _HistoryEntry(
-        qty: int.tryParse(j['qty'].toString()) ?? 0,
-        price: double.tryParse(j['price'].toString()) ?? 0.0,
+        qty: int.tryParse(j['qty']?.toString() ?? '') ?? 0,
+        price: double.tryParse(j['price']?.toString() ?? '') ?? 0.0,
         direction: (j['direction'] as String?) ?? 'in',
-        at: _parseMysqlDateTime(j['at'] as String),
+        at: _parseMysqlDateTime(j['at']?.toString() ?? DateTime.now().toString()),
       );
 }
